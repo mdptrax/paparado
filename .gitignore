@@ -1,0 +1,17 @@
+# Database
+trax.db
+
+# File Excel
+log_produzione.xlsx
+kit.xlsx
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Ambiente
+.env
+
+# Sistema
+.DS_Store
+Thumbs.db
