@@ -20,6 +20,8 @@ from io import BytesIO
 # ================= DATABASE =================
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./trax.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://")
 
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(
@@ -83,6 +85,15 @@ class Lotto(Base):
     end_time = Column(String)
     items = Column(Text)
 
+
+class Kit(Base):
+    __tablename__ = "kit"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String, unique=True, index=True)
+
+
+# 🔥 QUI
 Base.metadata.create_all(bind=engine)
 
 # ================= SCHEMI =================
@@ -115,16 +126,9 @@ class AutoclaveLoad(BaseModel):
 # ================= APP =================
 from contextlib import asynccontextmanager
 
-KIT_LIST = []
-KIT_FILE = "kit.xlsx"   # 🔥 AGGIUNGI QUESTA
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("🚀 Avvio applicazione...")
-    carica_kit()
-    yield
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
@@ -136,24 +140,6 @@ app.add_middleware(
 )
 
 # ================= KIT EXCEL =================
-
-def carica_kit():
-    global KIT_LIST
-    try:
-        df = pd.read_excel(KIT_FILE)
-
-        df.columns = df.columns.str.strip().str.lower()
-
-        if "nome" not in df.columns:
-            print("Colonna 'nome' non trovata")
-            KIT_LIST = []
-            return
-
-        KIT_LIST = df["nome"].dropna().astype(str).tolist()
-        print("KIT CARICATI:", KIT_LIST)
-    except Exception as e:
-        print("Errore caricamento kit:", e)
-        KIT_LIST = []
 
 # ================= STARTUP =================
 @app.get("/download-log")
@@ -273,47 +259,43 @@ def genera_report(autoclave: str, db: Session = Depends(get_db)):
     )
 
     
-@app.post("/upload-kit")
-async def upload_kit(file: UploadFile = File(...)):
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(BASE_DIR, "kit.xlsx")
+@app.post("/doc")
+async def upload_excel(file: UploadFile, db: Session = Depends(get_db)):
+    import pandas as pd
 
-    try:
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+    df = pd.read_excel(file.file)
 
-        print("✅ Excel aggiornato")
+    # 🔥 pulizia colonne
+    df.columns = df.columns.str.strip().str.lower()
 
-        carica_kit()  # 🔥 ricarica lista
+    if "nome" not in df.columns:
+        raise HTTPException(400, "Colonna 'nome' mancante")
 
-        return {"message": "File caricato con successo"}
+    inseriti = 0
 
-    except Exception as e:
-        print("❌ ERRORE UPLOAD:", e)
-        return {"message": f"Errore: {str(e)}"}
+    for nome in df["nome"].dropna():
+        nome = str(nome).strip()
+
+        esiste = db.query(Kit).filter(Kit.nome == nome).first()
+        if not esiste:
+            db.add(Kit(nome=nome))
+            inseriti += 1
+
+    db.commit()
+
+    return {
+        "ok": True,
+        "inseriti": inseriti
+    }
     
 @app.get("/kit")
-def get_kit():
-    return KIT_LIST
+def get_kit(db: Session = Depends(get_db)):
+    kits = db.query(Kit).order_by(Kit.nome).all()
+    return [k.nome for k in kits]
 
 
 from fastapi import Query
 
-@app.post("/kit")
-def add_kit(name: str = Query(...)):
-    global KIT_LIST
-
-    print("👉 Ricevuto:", name)
-
-    if name not in KIT_LIST:
-        KIT_LIST.append(name)
-
-        df = pd.DataFrame({"nome": KIT_LIST})
-        df.to_excel("kit.xlsx", index=False)
-
-        print("✅ Salvato")
-
-    return {"ok": True}
 
 # ================= UTILS =================
 def now():
@@ -1057,13 +1039,7 @@ async function addItem(){
  return;
 }
 
- if(nome && !KIT_DB.includes(nome)){
-   await fetch('/kit?name=' + encodeURIComponent(nome), {
-     method:'POST'
-   });
-
-   await loadKitSuggestions();
- }
+ 
 
  await fetch('/items',{
   method:'POST',
