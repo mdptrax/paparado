@@ -11,9 +11,11 @@ import os
 import pandas as pd
 from fastapi import UploadFile, File
 import shutil
-from sqlalchemy import create_engine
 from fastapi.responses import StreamingResponse
 import io
+from docxtpl import DocxTemplate
+
+
 
 # ================= DATABASE =================
 
@@ -155,7 +157,6 @@ def carica_kit():
 
 # ================= STARTUP =================
 @app.get("/download-log")
-@app.get("/download-log")
 def download_log(db: Session = Depends(get_db)):
 
     items = db.query(Item).all()
@@ -214,6 +215,53 @@ def report_autoclave(a: str, db: Session = Depends(get_db)):
     return tests
 
 # ================= API KIT =================
+
+from docxtpl import DocxTemplate
+import tempfile
+
+@app.get("/genera-report-autoclave/{autoclave}")
+def genera_report(autoclave: str, db: Session = Depends(get_db)):
+
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    template_path = "SchedaControlloAutoclave_TEMPLATE_OK.docx"
+
+    doc = DocxTemplate(template_path)
+
+    tests = db.query(TestAutoclave).filter(
+        TestAutoclave.autoclave == autoclave
+    ).all()
+
+    def get_test(tipo):
+        for t in tests:
+            if tipo.lower() in t.tipo.lower():
+                return t.codice
+        return "NON ESEGUITO"
+
+    context = {
+        "data": datetime.now().strftime("%d/%m/%Y"),
+        "autoclave": autoclave,
+        "operatore": tests[0].operator if tests else "-",
+
+        "riscaldamento": get_test("riscaldamento"),
+        "vuoto": get_test("vuoto"),
+        "bowie_dick": get_test("bowie"),
+        "helix_test": get_test("helix"),
+        "prova_biologica": get_test("biologica"),
+        "note": ""
+    }
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+        doc.render(context)
+        doc.save(tmp.name)
+
+        return FileResponse(
+            tmp.name,
+            filename=f"Report_{autoclave}.docx",
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+    
 @app.post("/upload-kit")
 async def upload_kit(file: UploadFile = File(...)):
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1349,16 +1397,7 @@ async function startTestCycle(){
 }
 
 function printReport(a){
-
- let content = document.getElementById("report_test").innerHTML;
-
- let w = window.open('');
- w.document.write(`
-   <h2>Report Test Autoclave ${a}</h2>
-   ${content}
- `);
-
- w.print();
+  window.open(`https://paparado-production.up.railway.app/genera-report-autoclave/${a}`);
 }
 loadUOSuggestions();
 
