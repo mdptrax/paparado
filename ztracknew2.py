@@ -14,7 +14,7 @@ import shutil
 from fastapi.responses import StreamingResponse
 import io
 from docxtpl import DocxTemplate
-
+from io import BytesIO
 
 
 # ================= DATABASE =================
@@ -223,7 +223,17 @@ import tempfile
 def genera_report(autoclave: str, db: Session = Depends(get_db)):
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    template_path = "SchedaControlloAutoclave_TEMPLATE_OK.docx"
+
+    template_path = os.path.join(
+        BASE_DIR,
+        "SchedaControlloAutoclave_TEMPLATE_OK.docx"
+    )
+
+    print("📁 PATH:", template_path)
+    print("📁 ESISTE:", os.path.exists(template_path))
+
+    if not os.path.exists(template_path):
+        raise HTTPException(500, f"Template NON trovato: {template_path}")
 
     doc = DocxTemplate(template_path)
 
@@ -241,7 +251,6 @@ def genera_report(autoclave: str, db: Session = Depends(get_db)):
         "data": datetime.now().strftime("%d/%m/%Y"),
         "autoclave": autoclave,
         "operatore": tests[0].operator if tests else "-",
-
         "riscaldamento": get_test("riscaldamento"),
         "vuoto": get_test("vuoto"),
         "bowie_dick": get_test("bowie"),
@@ -250,16 +259,18 @@ def genera_report(autoclave: str, db: Session = Depends(get_db)):
         "note": ""
     }
 
-    import tempfile
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
-        doc.render(context)
-        doc.save(tmp.name)
+    buffer = BytesIO()
+    doc.render(context)
+    doc.save(buffer)
+    buffer.seek(0)
 
-        return FileResponse(
-            tmp.name,
-            filename=f"Report_{autoclave}.docx",
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f"attachment; filename=Report_{autoclave}.docx"
+        }
+    )
 
     
 @app.post("/upload-kit")
@@ -1396,8 +1407,31 @@ async function startTestCycle(){
  }
 }
 
-function printReport(a){
-  window.open(`https://paparado-production.up.railway.app/genera-report-autoclave/${a}`);
+async function printReport(a){
+  try {
+    const res = await fetch(`/genera-report-autoclave/${a}`);
+
+    if (!res.ok) {
+      alert("Errore generazione report");
+      return;
+    }
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+
+    const aTag = document.createElement("a");
+    aTag.href = url;
+    aTag.download = `Report_${a}.docx`;
+    document.body.appendChild(aTag);
+    aTag.click();
+    aTag.remove();
+
+    window.URL.revokeObjectURL(url);
+
+  } catch (e) {
+    console.error(e);
+    alert("Errore download");
+  }
 }
 loadUOSuggestions();
 
